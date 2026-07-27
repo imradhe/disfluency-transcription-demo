@@ -1,0 +1,1 @@
+ topic of reactor control is also essentially related to controlling the neutron profile or neutron flux distribution inside the reactor, both is variation with respect to space and also with respect to time.

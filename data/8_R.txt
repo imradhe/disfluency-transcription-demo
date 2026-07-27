@@ -1,0 +1,1 @@
+ Once we have loaded a reactor with a certain quantity of fuel, we can keep on running for a very very long period which can range from several months to more than a year.

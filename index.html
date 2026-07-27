@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RSML Transcript Viewer</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css" />
+<style>
+  :root {
+    --ink: #1c1b1a;
+    --paper: #faf9f7;
+    --line: #e2ded7;
+    --accent: #7a5cff;
+    --mono: "IBM Plex Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+    --sans: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--paper);
+    color: var(--ink);
+  }
+  header {
+    padding: 18px 28px 14px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+  header .sub { font-size: 12.5px; color: #837c72; }
+
+  main { padding: 20px 28px 60px; max-width: 1400px; margin: 0 auto; }
+
+  .item {
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 26px;
+    overflow: hidden;
+  }
+  .item .item-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    background: #fcfbfa;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .item .item-header .fname {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: #59524a;
+    white-space: nowrap;
+  }
+  .item audio { flex: 1; min-width: 240px; height: 34px; }
+
+  .panes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  @media (max-width: 860px) {
+    .panes { grid-template-columns: 1fr; }
+  }
+  .pane { display: flex; flex-direction: column; }
+  .pane + .pane { border-left: 1px solid var(--line); }
+  @media (max-width: 860px) {
+    .pane + .pane { border-left: none; border-top: 1px solid var(--line); }
+  }
+  .pane .pane-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #837c72;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--line);
+    background: #fcfbfa;
+  }
+
+  .rsml-textarea {
+    width: 100%;
+    border: none;
+    resize: vertical;
+    min-height: 220px;
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.7;
+    color: var(--ink);
+    outline: none;
+  }
+  .rsml-output {
+    min-height: 220px;
+    padding: 16px;
+    font-size: 14px;
+    line-height: 1.9;
+    overflow-y: auto;
+  }
+
+  .status {
+    margin: 60px auto;
+    max-width: 460px;
+    text-align: center;
+    color: #837c72;
+    font-size: 13.5px;
+    padding: 0 20px;
+  }
+  .status strong { color: var(--ink); display: block; margin-bottom: 6px; font-size: 15px; }
+  .status code { background: #efeaff; padding: 1px 5px; border-radius: 4px; }
+
+
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RSML Transcript Viewer</h1>
+  <span class="sub">every .wav / .rsml pair in ./data, audio + transcript + rendered preview</span>
+</header>
+
+<main id="main">
+  <div class="status" id="status">Loading <code>data/</code>…</div>
+</main>
+
+<script type="module">
+  import RSMLAnnotator from "https://cdn.jsdelivr.net/npm/rsml@3.1.1/rsml.esm.js";
+
+  const DATA_DIR = "data/";
+  const main = document.getElementById("main");
+  const statusEl = document.getElementById("status");
+
+  function setStatus(html) {
+    statusEl.innerHTML = html;
+    if (!main.contains(statusEl)) main.appendChild(statusEl);
+  }
+
+  // Parse the directory index (as served by e.g. `python3 -m http.server`,
+  // `npx http-server`, or nginx autoindex) to discover files, since plain
+  // relative fetches can't list a folder's contents on their own.
+  async function listDataDir() {
+    const res = await fetch(DATA_DIR);
+    if (!res.ok) throw new Error(`Could not open ${DATA_DIR} (HTTP ${res.status})`);
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const hrefs = [...doc.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href") || "")
+      .map((h) => decodeURIComponent(h.split("/").pop()));
+    return hrefs.filter((h) => /\.(wav|rsml)$/i.test(h));
+  }
+
+  function groupPairs(filenames) {
+    const pairs = new Map();
+    for (const fname of filenames) {
+      const dot = fname.lastIndexOf(".");
+      const name = fname.slice(0, dot);
+      const ext = fname.slice(dot + 1).toLowerCase();
+      if (!pairs.has(name)) pairs.set(name, { wav: false, rsml: false });
+      pairs.get(name)[ext] = true;
+    }
+    return pairs;
+  }
+
+  function buildItem(name, index) {
+    const wrap = document.createElement("div");
+    wrap.className = "item";
+    wrap.innerHTML = `
+      <div class="item-header">
+        <span class="fname">${name}</span>
+        <audio controls src="${DATA_DIR}${encodeURIComponent(name)}.wav"></audio>
+      </div>
+      <div class="panes">
+        <div class="pane">
+          <div class="pane-label">RSML transcript</div>
+          <textarea class="rsml-textarea" id="rsml-ta-${index}" spellcheck="false"></textarea>
+        </div>
+        <div class="pane">
+          <div class="pane-label">Rendered preview</div>
+          <div class="rsml-output" id="rsml-out-${index}"></div>
+        </div>
+      </div>
+    `;
+    return wrap;
+  }
+
+  async function init() {
+    let filenames;
+    try {
+      filenames = await listDataDir();
+    } catch (err) {
+      setStatus(`<strong>Couldn't read data/</strong>
+        Serve this file over HTTP with a directory listing enabled, e.g.
+        <code>python3 -m http.server</code> run from the folder that
+        contains <code>data/</code>, then open this page through that
+        server (not via <code>file://</code>).<br><br>${err.message}`);
+      return;
+    }
+
+    const pairs = groupPairs(filenames);
+    const names = [...pairs.keys()]
+      .filter((n) => pairs.get(n).wav && pairs.get(n).rsml)
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+
+    if (!names.length) {
+      setStatus(`<strong>No matching pairs found</strong>
+        Looked in <code>data/</code> for files sharing a name with both a
+        <code>.wav</code> and a <code>.rsml</code> extension.`);
+      return;
+    }
+
+    statusEl.remove();
+
+    for (let i = 0; i < names.length; i++) {
+      const name = names[i];
+      const item = buildItem(name, i);
+      main.appendChild(item);
+
+      const textarea = item.querySelector(`#rsml-ta-${i}`);
+      const output = item.querySelector(`#rsml-out-${i}`);
+
+      const res = await fetch(`${DATA_DIR}${encodeURIComponent(name)}.rsml`);
+      textarea.value = res.ok ? await res.text() : `[failed to load ${name}.rsml]`;
+
+      new RSMLAnnotator({ textarea, output });
+    }
+  }
+
+  init();
+</script>
+
+</body>
+</html>
