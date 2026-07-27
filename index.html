@@ -130,10 +130,7 @@
   import RSMLAnnotator from "https://cdn.jsdelivr.net/npm/rsml@3.1.1/rsml.esm.js";
 
   const DATA_DIR = "data/";
-  // How many consecutive missing numbers in a row before we assume the
-  // list has ended. Raise this if your numbering has gaps in it.
-  const MAX_CONSECUTIVE_MISSES = 5;
-  const HARD_CAP = 5000;
+  const MANIFEST_PATH = `${DATA_DIR}manifest.txt`;
 
   const main = document.getElementById("main");
   const statusEl = document.getElementById("status");
@@ -143,47 +140,43 @@
     if (!main.contains(statusEl)) main.appendChild(statusEl);
   }
 
-  async function fileExists(path) {
-    try {
-      const res = await fetch(path, { method: "HEAD", cache: "no-store" });
-      if (res.ok) return true;
-      // Some static hosts (incl. plain `file://` setups) don't support HEAD
-      // reliably — fall back to a ranged GET before giving up.
-      if (res.status === 405 || res.status === 501) {
-        const res2 = await fetch(path, { cache: "no-store" });
-        return res2.ok;
-      }
-      return false;
-    } catch {
-      return false;
-    }
+  // Static hosts like Netlify don't expose a directory listing, so the page
+  // can't discover filenames on its own. Instead it reads data/manifest.txt —
+  // one filename (no extension) per line. Generate/refresh it from the
+  // data/ folder with:
+  //
+  //   ls data/*.rsml | xargs -n1 basename | sed 's/\.rsml$//' > data/manifest.txt
+  //
+  async function loadManifestNames() {
+    const res = await fetch(MANIFEST_PATH, { cache: "no-store" });
+    if (!res.ok) throw new Error(`Could not load ${MANIFEST_PATH} (HTTP ${res.status})`);
+    const text = await res.text();
+    return text.split("\n").map((l) => l.trim()).filter(Boolean);
   }
 
-  // No directory listing is available on static hosts like Netlify, so
-  // instead of reading the folder we just probe sequential numeric
-  // filenames (1.wav/1.rsml, 2.wav/2.rsml, ...) until several in a row
-  // are missing.
+  // Sort by the leading number in the filename (1_R, 2_F2, 10_RF, ...) so
+  // "10_RF" sorts after "9_F" instead of after "1_R".
+  function sortByLeadingNumber(names) {
+    return [...names].sort((a, b) => {
+      const na = parseInt(a.match(/^\d+/)?.[0] ?? "", 10);
+      const nb = parseInt(b.match(/^\d+/)?.[0] ?? "", 10);
+      if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    });
+  }
+
   async function findNumberedPairs() {
-    const names = [];
-    let missStreak = 0;
-
-    for (let n = 1; n <= HARD_CAP; n++) {
-      const name = String(n);
-      const [hasWav, hasRsml] = await Promise.all([
-        fileExists(`${DATA_DIR}${name}.wav`),
-        fileExists(`${DATA_DIR}${name}.rsml`),
-      ]);
-
-      if (hasWav && hasRsml) {
-        names.push(name);
-        missStreak = 0;
-      } else {
-        missStreak++;
-        if (missStreak >= MAX_CONSECUTIVE_MISSES) break;
-      }
+    let names;
+    try {
+      names = await loadManifestNames();
+    } catch (err) {
+      setStatus(`<strong>Couldn't load data/manifest.txt</strong>
+        Generate it once from the folder containing your files:<br><br>
+        <code>ls data/*.rsml | xargs -n1 basename | sed 's/\\.rsml$//' &gt; data/manifest.txt</code>
+        <br><br>${err.message}`);
+      return [];
     }
-
-    return names;
+    return sortByLeadingNumber(names);
   }
 
   function buildItem(name, index) {
